@@ -1749,32 +1749,95 @@ function selPay(m){ payM=m; ['cash','qr','card','credit'].forEach(x=>document.ge
 function calcChg(){ const g=parseFloat(document.getElementById('cash-in').value)||0; const t=getTotal(); const b=document.getElementById('chgbox'); if(g>0){b.style.display='block';document.getElementById('chgamt').textContent='฿'+Math.max(0,g-t).toLocaleString();}else b.style.display='none'; }
 
 function confirmPay(){
-  const t=getTotal();
-  if(payM==='cash'){const g=parseFloat(document.getElementById('cash-in').value)||0;if(g<t){document.getElementById('cash-in').style.borderColor='var(--r)';return;}}
-  const now=new Date();
-  const items=cart.map(i=>({prodId:i.id,name:i.name,cat:i.cat,icon:i.icon,price:i.price,qty:i.qty,vars:i.vars}));
-  const sub=cart.reduce((s,i)=>s+i.price*i.qty,0);
-  const disc=Math.round(getDisc(sub));
-  const txn={id:txnId++,ts:now,items,subtotal:sub,discount:disc,promoDiscount:0,total:t,method:payM,member:null,ptsEarned:0,note:'',cashier:currentUser?.displayName||''};
+  // คำนวณยอดรวม (รวม promo ถ้ามี)
+  const sub = cart.reduce((s,i)=>s+i.price*i.qty,0);
+  const disc = Math.round(getDisc(sub));
+  const promoD = (typeof getPromoDiscount==='function') ? getPromoDiscount(sub-disc) : 0;
+  const t = Math.max(0, Math.round(sub-disc-promoD));
+
+  if(payM==='cash'){
+    const g=parseFloat(document.getElementById('cash-in').value)||0;
+    if(g<t){document.getElementById('cash-in').style.borderColor='var(--r)';return;}
+  }
+
+  const now = new Date();
+  const cashGiven = parseFloat(document.getElementById('cash-in').value)||0;
+  const items = cart.map(i=>({prodId:i.id,name:i.name,cat:i.cat,icon:i.icon,price:i.price,qty:i.qty,vars:i.vars}));
+
+  // คำนวณแต้มสมาชิก
+  let ptsEarned = 0;
+  if(currentMember && typeof calcPointsEarned==='function'){
+    ptsEarned = calcPointsEarned(items, t, currentMember.id);
+  } else {
+    ptsEarned = Math.floor(t/10);
+  }
+
+  // อัปเดตแต้มสมาชิก
+  if(currentMember){
+    const members = loadMembers();
+    const m = members.find(x=>x.id===currentMember.id);
+    if(m){
+      m.points = (m.points||0) + ptsEarned;
+      m.txnCount = (m.txnCount||0) + 1;
+      m.totalSpend = (m.totalSpend||0) + t;
+      if(!m.ptsHistory) m.ptsHistory=[];
+      m.ptsHistory.push({ts:now.toISOString(), delta:ptsEarned, note:'ซื้อสินค้า ฿'+t});
+      saveMembers(members);
+      currentMember = m;
+      if(SB_ON) gsSaveMember(m);
+    }
+  }
+
+  const txn = {
+    id:txnId++, ts:now, items,
+    subtotal:sub, discount:disc, promoDiscount:promoD, total:t,
+    method:payM,
+    member: currentMember ? {id:currentMember.id, name:currentMember.name, points:currentMember.points} : null,
+    ptsEarned, note:billNote||'', cashier:currentUser?.displayName||''
+  };
   salesLog.push(txn);
-  // ตัดสต็อคในหน่วยความจำ
+
+  // ตัดสต็อคในหน่วยความจำ + เก็บ list ไว้ sync
   const updatedProds = [];
   cart.forEach(i=>{
-    const p=products.find(x=>x.id===i.id);
-    if(p){ p.stock=Math.max(0,p.stock-i.qty); updatedProds.push(p); }
+    const p = products.find(x=>x.id===i.id);
+    if(p){ p.stock = Math.max(0, p.stock-i.qty); updatedProds.push({...p}); }
   });
+
+  // แสดงผลลัพธ์
   const lbls={cash:'เงินสด',qr:'QR/โอน',card:'บัตร',credit:'เครดิต'};
-  const g=parseFloat(document.getElementById('cash-in').value)||0;
-  const dtl=payM==='cash'?`รับเงิน ฿${g.toLocaleString()} | ทอน ฿${Math.max(0,g-t).toLocaleString()}`:`ชำระ ฿${t.toLocaleString()} ผ่าน${lbls[payM]}`;
-  document.getElementById('ok-detail').textContent=dtl;
-  closeO('o-pay'); document.getElementById('o-ok').style.display='flex';
+  const dtl = payM==='cash'
+    ? `รับเงิน ฿${cashGiven.toLocaleString()} | ทอน ฿${Math.max(0,cashGiven-t).toLocaleString()}`
+    : `ชำระ ฿${t.toLocaleString()} ผ่าน${lbls[payM]}`;
+  document.getElementById('ok-detail').textContent = dtl
+    + (currentMember ? `\n👤 ${currentMember.name} +${ptsEarned} pts` : '');
+
+  closeO('o-pay');
+  document.getElementById('o-ok').style.display = 'flex';
   updateNavRevenue();
-  // Sync ขึ้น Supabase
+  renderProds(); // อัปเดตสต็อคบนหน้า POS ทันที
+
+  // ── Sync ทุกอย่างขึ้น Supabase ──
   if(SB_ON){
     gsSaveSale(txn);
-    // sync สต็อคทุกสินค้าที่ขายไป
-    updatedProds.forEach(p => gsSaveProduct(p));
+    updatedProds.forEach(p => gsSaveProduct(p)); // sync สต็อคทุกชิ้นที่ขาย
     updateSyncStatus('✅ บันทึกการขายแล้ว');
+  }
+
+  // Reset per-sale state
+  const savedMem = currentMember;
+  const savedCash = cashGiven;
+  clearCart();
+  currentMember = null;
+  if(typeof updateMemberBtn==='function') updateMemberBtn();
+  activePromo = null;
+  if(typeof updatePromoBtn==='function') updatePromoBtn();
+  billNote = '';
+  document.getElementById('dv').value = '';
+
+  // แสดงใบเสร็จอัตโนมัติ
+  if(typeof showReceipt==='function'){
+    setTimeout(()=>{ closeO('o-ok'); showReceipt(txn, savedCash); }, 1800);
   }
 }
 function closeOk(){ closeO('o-ok'); clearCart(); document.getElementById('dv').value=''; renderProds(); }
@@ -2509,46 +2572,7 @@ renderFoot = function(){
 }
 
 /* ── OVERRIDE confirmPay to include receipt, member, promo ── */
-const _origConfirmPay = confirmPay;
-confirmPay = function(){
-  const t_val = getTotal_full();
-  if(payM==='cash'){const g=parseFloat(document.getElementById('cash-in').value)||0;if(g<t_val){document.getElementById('cash-in').style.borderColor='var(--r)';return;}}
-  const now=new Date();
-  const sub=cart.reduce((s,i)=>s+i.price*i.qty,0);
-  const disc=Math.round(getDisc(sub));
-  const promoD=getPromoDiscount(sub-disc);
-  const total=Math.max(0,sub-disc-promoD);
-  const items=cart.map(i=>({prodId:i.id,name:i.name,cat:i.cat,icon:i.icon,price:i.price,qty:i.qty,vars:i.vars}));
-  cart.forEach(i=>{const p=products.find(x=>x.id===i.id);if(p)p.stock=Math.max(0,p.stock-i.qty);});
-  // points
-  const ptsEarned=Math.floor(total/10);
-  if(currentMember){
-    const members=loadMembers();
-    const m=members.find(x=>x.id===currentMember.id);
-    if(m){ m.points=(m.points||0)+ptsEarned; m.txnCount=(m.txnCount||0)+1; m.totalSpend=(m.totalSpend||0)+total; currentMember=m; }
-    saveMembers(members);
-  }
-  const txn={id:txnId++,ts:now,items,subtotal:sub,discount:disc,promoDiscount:promoD,total,method:payM,member:currentMember?{id:currentMember.id,name:currentMember.name,points:currentMember.points}:null,ptsEarned,note:billNote,cashier:currentUser?.displayName||''};
-  salesLog.push(txn);
-  const cashGiven=parseFloat(document.getElementById('cash-in').value)||0;
-  const lbls={cash:'เงินสด',qr:'QR/โอน',card:'บัตร',credit:'เครดิต'};
-  const dtl=payM==='cash'?`รับเงิน ฿${cashGiven.toLocaleString()} | ทอน ฿${Math.max(0,cashGiven-total).toLocaleString()}`:`ชำระ ฿${total.toLocaleString()} ผ่าน${lbls[payM]}`;
-  document.getElementById('ok-detail').textContent=dtl;
-  closeO('o-pay');
-  // reset per-sale state
-  const savedMem=currentMember; const savedCash=cashGiven;
-  clearCart(); currentMember=null; updateMemberBtn(); activePromo=null; updatePromoBtn(); billNote=''; 
-  document.getElementById('dv').value='';
-  renderProds(); updateNavRevenue();
-  // Show success then offer receipt
-  document.getElementById('o-ok').style.display='flex';
-  document.getElementById('ok-detail').innerHTML=dtl+'<br><span style="font-size:11px;color:var(--t2)">'+
-    (savedMem?'👤 '+savedMem.name+' +'+ptsEarned+' pts<br>':'')+'</span>';
-  // Sync sale to GS
-  if(SB_ON){ gsSaveSale(txn); }
-  // Auto-show receipt after 1.8s
-  setTimeout(()=>{ closeO('o-ok'); showReceipt(txn, savedCash); }, 1800);
-}
+
 
 function getTotal_full(){
   const sub=cart.reduce((s,i)=>s+i.price*i.qty,0);
@@ -2989,25 +3013,7 @@ function doRedeem(){
 }
 
 /* ── PATCH confirmPay to use new points calc ── */
-const _origConfirmPay_v2 = confirmPay;
-confirmPay = function(){
-  // patch: use proper points calc
-  if(currentMember){
-    const members = loadMembers();
-    const m = members.find(x=>x.id===currentMember.id);
-    if(m){
-      const sub = cart.reduce((s,i)=>s+i.price*i.qty,0);
-      const d = getDisc(sub);
-      const promoD = getPromoDiscount ? getPromoDiscount(sub-d) : 0;
-      const total = Math.max(0,Math.round(sub-d-promoD));
-      const pts = calcPointsEarned(cart.map(i=>({...i,cat:i.cat})), total, currentMember.id);
-      // Temporarily store for the parent confirmPay to use
-      window._pendingPtsOverride = pts;
-    }
-  }
-  _origConfirmPay_v2();
-  window._pendingPtsOverride = null;
-}
+
 
 /* ── PATCH renderFoot to include tier discount ── */
 const _origRenderFoot_v2 = renderFoot;
