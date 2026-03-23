@@ -788,7 +788,7 @@ body{font-family:'Sarabun',sans-serif;font-size:14px;color:var(--t);background:v
     <div class="mrow"><div class="mlbl">ต้นทุน (฿)</div><input class="minput" type="number" id="pm-cost" placeholder="0" min="0"></div>
   </div>
   <div class="mgrid2">
-    <div class="mrow"><div class="mlbl">สต็อกรวม</div><input class="minput" type="number" id="pm-stock" placeholder="0" min="0"></div>
+    <div class="mrow"><div class="mlbl">สต็อกรวม <span id="pm-stock-hint" style="font-weight:400;color:var(--t2);font-size:11px">(คำนวณจากไซส์อัตโนมัติ ถ้ากรอกสต็อคแต่ละไซส์)</span></div><input class="minput" type="number" id="pm-stock" placeholder="0" min="0" id="pm-stock"></div>
     <div class="mrow"><div class="mlbl">จุดสั่งซื้อ (แจ้งเตือน)</div><input class="minput" type="number" id="pm-reorder" placeholder="10" min="0"></div>
   </div>
   <div class="mrow">
@@ -1801,7 +1801,19 @@ function confirmPay(){
   const updatedProds = [];
   cart.forEach(i=>{
     const p = products.find(x=>x.id===i.id);
-    if(p){ p.stock = Math.max(0, p.stock-i.qty); updatedProds.push({...p}); }
+    if(!p) return;
+    const size = i.vars?.size || '';
+    // ตัดสต็อคแยกไซส์ (ถ้ามี)
+    if(size && p.sizeStocks && p.sizeStocks[size] !== undefined){
+      p.sizeStocks[size] = Math.max(0, (p.sizeStocks[size]||0) - i.qty);
+    }
+    // คำนวณสต็อครวมจากผลรวมแต่ละไซส์
+    if(p.sizes && p.sizes.length > 0 && p.sizeStocks && Object.keys(p.sizeStocks).length > 0){
+      p.stock = p.sizes.reduce((sum, s) => sum + (p.sizeStocks[s]||0), 0);
+    } else {
+      p.stock = Math.max(0, p.stock - i.qty);
+    }
+    updatedProds.push({...p});
   });
 
   // แสดงผลลัพธ์
@@ -2072,7 +2084,7 @@ function renderSPT(existSP={},existSS={}){
   body.innerHTML=sizes.map(s=>`<tr>
     <td style="font-weight:700;font-size:12px">${s}</td>
     <td><input class="sp-input" id="sp-p-${s}" type="number" placeholder="${bp||'ราคาหลัก'}" value="${existSP[s]||''}"></td>
-    <td><input class="sp-input" id="sp-s-${s}" type="number" placeholder="0" value="${existSS[s]||''}"></td>
+    <td><input class="sp-input" id="sp-s-${s}" type="number" placeholder="0" value="${existSS[s]||\'\'}" oninput="updateStockTotal()"></td>
   </tr>`).join('');
 }
 function getSPD(){
@@ -2081,17 +2093,30 @@ function getSPD(){
   sizes.forEach(s=>{ const pv=document.getElementById('sp-p-'+s); const sv=document.getElementById('sp-s-'+s); if(pv&&pv.value)sp[s]=parseFloat(pv.value); if(sv&&sv.value)ss[s]=parseInt(sv.value); });
   return {sp,ss};
 }
+function updateStockTotal(){
+  // รวมสต็อคจากทุกไซส์แล้วใส่ใน pm-stock อัตโนมัติ
+  const sizes=document.getElementById('pm-sizes').value.trim().split(/\s+/).filter(Boolean);
+  if(!sizes.length) return;
+  let total=0;
+  sizes.forEach(s=>{ const sv=document.getElementById('sp-s-'+s); total+=sv?parseInt(sv.value)||0:0; });
+  const stockEl=document.getElementById('pm-stock');
+  if(stockEl){ stockEl.value=total; stockEl.style.background='var(--gl)'; stockEl.style.color='var(--gd)'; stockEl.readOnly=true; }
+}
 function saveProd(){
   const icon=document.getElementById('pm-icon').value.trim()||'📦';
   const cat=document.getElementById('pm-cat').value.trim()||'อื่นๆ';
   const name=document.getElementById('pm-name').value.trim();
   const price=parseFloat(document.getElementById('pm-price').value)||0;
-  const stock=parseInt(document.getElementById('pm-stock').value)||0;
   const sizes=document.getElementById('pm-sizes').value.trim().split(/\s+/).filter(Boolean);
   const colors=document.getElementById('pm-colors').value.trim().split(/\s+/).filter(Boolean);
   const designs=document.getElementById('pm-designs').value.trim().split(/\s+/).filter(Boolean);
   if(!name){alert('กรุณากรอกชื่อสินค้า');return;}
   const {sp,ss}=getSPD();
+  // สต็อครวม = ผลรวมจากแต่ละไซส์ (ถ้ามี) หรือค่าที่กรอกเอง
+  const hasSizeStock = sizes.length > 0 && Object.keys(ss).length > 0;
+  const stock = hasSizeStock
+    ? sizes.reduce((sum,s) => sum + (ss[s]||0), 0)
+    : parseInt(document.getElementById('pm-stock').value)||0;
   if(editId){ Object.assign(products.find(x=>x.id===editId),{icon,cat,name,price,stock,sizes,colors,designs,sizePrices:sp,sizeStocks:ss}); }
   else { products.push({id:nid++,icon,cat,name,price,stock,sizes,colors,designs,sizePrices:sp,sizeStocks:ss}); }
   closeO('o-prod'); renderManage(); renderCats(); renderProds();
