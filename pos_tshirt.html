@@ -1377,39 +1377,82 @@ let currentUser = null;
 let editUsername = null; // for user edit
 let selectedRole = 'admin';
 
-async function doLogin(){
-  const u = document.getElementById('li-user').value.trim();
-  const p = document.getElementById('li-pass').value;
+function doLogin(){
+  const u = (document.getElementById('li-user').value || '').trim();
+  const p = document.getElementById('li-pass').value || '';
   const err = document.getElementById('li-err');
   err.textContent = '';
-  if(!u || !p){ err.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน'; return; }
-  const users = loadUsers();
-  const found = users.find(x => x.username === u && x.passwordHash === simpleHash(p));
-  if(!found){
-    err.textContent = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
-    ['li-user','li-pass'].forEach(id=>{ const el=document.getElementById(id); el.classList.add('err'); setTimeout(()=>el.classList.remove('err'),500); });
+
+  if(!u || !p){
+    err.textContent = 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน';
     return;
   }
-  currentUser = found;
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('nav-avatar').textContent = found.displayName.charAt(0).toUpperCase();
-  document.getElementById('nav-avatar').style.background = found.color;
-  document.getElementById('nav-username').textContent = found.displayName;
-  // Restrict cashier: hide manage tab
-  if(found.role === 'cashier'){
-    document.getElementById('t-manage').style.display = 'none';
-    document.getElementById('t-dash').style.display = 'none';
-  } else {
-    document.getElementById('t-manage').style.display = '';
-    document.getElementById('t-dash').style.display = '';
+
+  // ตรวจสอบจาก localStorage ก่อนเสมอ (ไม่พึ่ง Supabase)
+  let users = [];
+  try { users = loadUsers(); } catch(e) { users = []; }
+
+  // ถ้า localStorage ว่าง ให้ใช้ default
+  if(!users || !users.length){
+    users = [
+      {username:'admin',    displayName:'Admin',       passwordHash:simpleHash('admin1234'), role:'admin',   color:'#1D9E75'},
+      {username:'cashier',  displayName:'แคชเชียร์',  passwordHash:simpleHash('1234'),      role:'cashier', color:'#378ADD'},
+    ];
+    saveUsers(users);
   }
-  document.getElementById('li-pass').value = '';
-  // บันทึก session ไว้ใน localStorage
-  localStorage.setItem('pimtee_session', JSON.stringify({
-    username: found.username, displayName: found.displayName,
-    role: found.role, color: found.color
-  }));
-  // โหลดข้อมูลล่าสุดจาก Supabase ทันที
+
+  const hash = simpleHash(p);
+  const found = users.find(x => x.username === u && x.passwordHash === hash);
+
+  if(!found){
+    err.textContent = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
+    const ui = document.getElementById('li-user');
+    const pi = document.getElementById('li-pass');
+    if(ui){ ui.style.borderColor='var(--r)'; setTimeout(()=>ui.style.borderColor='',600); }
+    if(pi){ pi.style.borderColor='var(--r)'; setTimeout(()=>pi.style.borderColor='',600); }
+    return;
+  }
+
+  // login สำเร็จ
+  applyLogin(found);
+}
+
+function applyLogin(found){
+  currentUser = found;
+  // บันทึก session
+  try {
+    localStorage.setItem('pimtee_session', JSON.stringify({
+      username:found.username, displayName:found.displayName,
+      role:found.role, color:found.color||'#1D9E75'
+    }));
+  } catch(e){}
+
+  // ซ่อนหน้า login
+  const ls = document.getElementById('login-screen');
+  if(ls) ls.style.display = 'none';
+
+  // อัปเดต nav
+  const av = document.getElementById('nav-avatar');
+  const un = document.getElementById('nav-username');
+  if(av){ av.textContent = (found.displayName||'?').charAt(0).toUpperCase(); av.style.background = found.color||'#1D9E75'; }
+  if(un) un.textContent = found.displayName||found.username;
+
+  // จำกัดสิทธิ์ cashier
+  const tm = document.getElementById('t-manage');
+  const td = document.getElementById('t-dash');
+  if(found.role === 'cashier'){
+    if(tm) tm.style.display = 'none';
+    if(td) td.style.display = 'none';
+  } else {
+    if(tm) tm.style.display = '';
+    if(td) td.style.display = '';
+  }
+
+  // ล้างฟอร์ม
+  const lp = document.getElementById('li-pass');
+  if(lp) lp.value = '';
+
+  // โหลดข้อมูลจาก Supabase
   if(SB_ON) loadFromGS();
 }
 
@@ -2206,19 +2249,8 @@ setInterval(updateClock,1000);
     if(raw){
       const found = JSON.parse(raw);
       if(found && found.username){
-        // restore session สำเร็จ — ข้ามหน้า login
-        currentUser = found;
-        document.getElementById('login-screen').style.display = 'none';
-        const av = document.getElementById('nav-avatar');
-        const un = document.getElementById('nav-username');
-        if(av){ av.textContent = found.displayName.charAt(0).toUpperCase(); av.style.background = found.color||'#1D9E75'; }
-        if(un) un.textContent = found.displayName;
-        if(found.role==='cashier'){
-          document.getElementById('t-manage').style.display='none';
-          document.getElementById('t-dash').style.display='none';
-        }
-        // โหลดข้อมูลล่าสุดจาก Supabase
-        if(SB_ON){ console.log('Session restored for: '+found.username); loadFromGS(); }
+        console.log('Session restored for:', found.username);
+        applyLogin(found);
         return;
       }
     }
