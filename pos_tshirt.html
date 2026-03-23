@@ -1726,19 +1726,31 @@ function calcChg(){ const g=parseFloat(document.getElementById('cash-in').value)
 function confirmPay(){
   const t=getTotal();
   if(payM==='cash'){const g=parseFloat(document.getElementById('cash-in').value)||0;if(g<t){document.getElementById('cash-in').style.borderColor='var(--r)';return;}}
-  // Save to sales log
   const now=new Date();
   const items=cart.map(i=>({prodId:i.id,name:i.name,cat:i.cat,icon:i.icon,price:i.price,qty:i.qty,vars:i.vars}));
   const sub=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const disc=Math.round(getDisc(sub));
-  salesLog.push({id:txnId++,ts:now,items,subtotal:sub,discount:disc,total:t,method:payM});
-  cart.forEach(i=>{const p=products.find(x=>x.id===i.id);if(p)p.stock=Math.max(0,p.stock-i.qty);});
+  const txn={id:txnId++,ts:now,items,subtotal:sub,discount:disc,promoDiscount:0,total:t,method:payM,member:null,ptsEarned:0,note:'',cashier:currentUser?.displayName||''};
+  salesLog.push(txn);
+  // ตัดสต็อคในหน่วยความจำ
+  const updatedProds = [];
+  cart.forEach(i=>{
+    const p=products.find(x=>x.id===i.id);
+    if(p){ p.stock=Math.max(0,p.stock-i.qty); updatedProds.push(p); }
+  });
   const lbls={cash:'เงินสด',qr:'QR/โอน',card:'บัตร',credit:'เครดิต'};
   const g=parseFloat(document.getElementById('cash-in').value)||0;
   const dtl=payM==='cash'?`รับเงิน ฿${g.toLocaleString()} | ทอน ฿${Math.max(0,g-t).toLocaleString()}`:`ชำระ ฿${t.toLocaleString()} ผ่าน${lbls[payM]}`;
   document.getElementById('ok-detail').textContent=dtl;
   closeO('o-pay'); document.getElementById('o-ok').style.display='flex';
   updateNavRevenue();
+  // Sync ขึ้น Supabase
+  if(SB_ON){
+    gsSaveSale(txn);
+    // sync สต็อคทุกสินค้าที่ขายไป
+    updatedProds.forEach(p => gsSaveProduct(p));
+    updateSyncStatus('✅ บันทึกการขายแล้ว');
+  }
 }
 function closeOk(){ closeO('o-ok'); clearCart(); document.getElementById('dv').value=''; renderProds(); }
 
