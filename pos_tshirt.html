@@ -357,6 +357,14 @@ body{font-family:'Sarabun',sans-serif;font-size:14px;color:var(--t);background:v
 .dr-val{font-weight:600;color:var(--t)}
 
 
+/* ── LOADING OVERLAY ── */
+#loading-overlay{position:fixed;inset:0;background:var(--bg3);z-index:8000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .3s}
+#loading-overlay.hide{opacity:0;pointer-events:none}
+.loading-logo{font-size:20px;font-weight:700;color:var(--t)}
+.loading-logo span{color:var(--g)}
+.loading-spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--g);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:13px;color:var(--t2)}
 /* ── LOYALTY SYSTEM ── */
 .tier-bar-wrap{height:8px;background:var(--bg3);border-radius:6px;overflow:hidden;margin:4px 0}
 .tier-bar{height:100%;border-radius:6px;transition:width .6s}
@@ -397,6 +405,13 @@ body{font-family:'Sarabun',sans-serif;font-size:14px;color:var(--t);background:v
 </head>
 <body>
 <div class="app">
+
+<!-- LOADING OVERLAY -->
+<div id="loading-overlay">
+  <div class="loading-logo"><span>Pimtee</span> POS</div>
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loading-text">กำลังโหลดข้อมูล...</div>
+</div>
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
@@ -1182,9 +1197,18 @@ function updateSyncStatus(msg) {
 }
 
 /* ── Load all data from Supabase on login ── */
+function showLoadingOverlay(show, text='กำลังโหลดข้อมูล...') {
+  const el = document.getElementById('loading-overlay');
+  const tx = document.getElementById('loading-text');
+  if (!el) return;
+  if (show) { el.classList.remove('hide'); if(tx) tx.textContent = text; }
+  else { el.classList.add('hide'); setTimeout(()=>{ el.style.display='none'; }, 350); }
+}
+
 async function loadFromGS() {
   if (!SB_ON) return;
   showSync(true);
+  showLoadingOverlay(true, 'กำลังโหลดข้อมูลจาก Supabase...');
   try {
     // Products
     const prods = await sbGet('pos_products', 'order=id');
@@ -1235,6 +1259,7 @@ async function loadFromGS() {
     console.error('loadFromGS error:', e);
   } finally {
     showSync(false);
+    showLoadingOverlay(false);
   }
 }
 
@@ -2084,6 +2109,8 @@ setInterval(updateClock,1000);
 // ── Startup: restore session or show login ──
 (function startApp(){
   if(SB_ON) setTimeout(()=>{ const s=document.getElementById('sync-status'); if(s) s.textContent='☁️ ออนไลน์'; }, 300);
+  // ถ้าไม่ใช้ Supabase ซ่อน overlay ทันที
+  if(!SB_ON) showLoadingOverlay(false);
 
   // ลอง restore session จาก localStorage
   try {
@@ -2109,7 +2136,8 @@ setInterval(updateClock,1000);
     }
   } catch(e){ localStorage.removeItem('pimtee_session'); }
 
-  // ไม่มี session → แสดงหน้า login
+  // ไม่มี session → ซ่อน overlay แล้วแสดงหน้า login
+  showLoadingOverlay(false);
   document.getElementById('login-screen').style.display = 'flex';
   setTimeout(()=>{ const el=document.getElementById('li-user'); if(el) el.focus(); }, 150);
   console.log('Pimtee POS: Please login');
