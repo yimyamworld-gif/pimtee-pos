@@ -1379,11 +1379,19 @@ async function doLogin(){
     document.getElementById('t-dash').style.display = '';
   }
   document.getElementById('li-pass').value = '';
+  // บันทึก session ไว้ใน localStorage
+  localStorage.setItem('pimtee_session', JSON.stringify({
+    username: found.username, displayName: found.displayName,
+    role: found.role, color: found.color
+  }));
+  // โหลดข้อมูลล่าสุดจาก Supabase ทันที
+  if(SB_ON) loadFromGS();
 }
 
 function doLogout(){
   if(!confirm('ออกจากระบบใช่ไหม?')) return;
   currentUser = null;
+  localStorage.removeItem('pimtee_session');
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('li-user').value = '';
   document.getElementById('li-pass').value = '';
